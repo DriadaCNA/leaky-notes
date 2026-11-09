@@ -15,6 +15,7 @@ Two flaws are planted here:
 import sqlite3
 
 from flask import Flask, g, jsonify, request
+from werkzeug.security import check_password_hash, generate_password_hash
 
 DATABASE = "leaky.db"
 
@@ -35,39 +36,64 @@ def close_db(exception):
         db.close()
 
 
-@app.post("/register")
+@app.route("/register", methods=["POST"])
 def register():
-    data = request.get_json(silent=True) or {}
-    username, password = data.get("username"), data.get("password")
-    if not username or not password:
-        return jsonify({"error": "username and password required"}), 400
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid registration data"}), 400
+
+    required_fields = ["username", "email", "password"]
+
+    for field in required_fields:
+        value = data.get(field)
+
+        if not isinstance(value, str) or not value.strip():
+            return jsonify({"error": "Invalid registration data"}), 400
+
+    username = data["username"].strip()
+    email = data["email"].strip()
+    password = data["password"]
+
+    password_hash = generate_password_hash(
+        password,
+        method="pbkdf2:sha256"
+    )
+
     db = get_db()
+
     try:
-        # FLAW 1: the password is written straight to the database as plaintext.
         db.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
-            (username, password),
+            """
+            INSERT INTO users (username, email, password_hash)
+            VALUES (?, ?, ?)
+            """,
+            (username, email, password_hash)
         )
         db.commit()
+
     except sqlite3.IntegrityError:
-        return jsonify({"error": "username taken"}), 409
-    return jsonify({"message": f"registered {username}"}), 201
+        return jsonify({"error": "Username or email already exists"}), 409
 
-
+    return jsonify({"message": "user created"}), 201
+    
 @app.post("/login")
 def login():
     data = request.get_json(silent=True) or {}
-    username, password = data.get("username"), data.get("password")
+    username = data.get("username")
+    password = data.get("password")
+
     row = get_db().execute(
         "SELECT * FROM users WHERE username = ?", (username,)
     ).fetchone()
-    # FLAW 1 (cont.): plaintext comparison, because the stored value is plaintext.
-    if row is None or row["password"] != password:
-        return jsonify({"error": "bad credentials"}), 401
-    # A "token" that is just the user id in the clear. Not how real auth works;
-    # good enough to demonstrate the authorization flaw below.
-    return jsonify({"token": f"user-{row['id']}"}), 200
 
+    if row is None or not check_password_hash(row["password_hash"], password):
+        return jsonify({"error": "bad credentials"}), 401
+
+    return jsonify({
+        "id": row["id"],
+        "username": row["username"],
+    }), 200
 
 def current_user_id():
     token = request.headers.get("Authorization", "")
