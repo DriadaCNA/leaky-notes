@@ -79,17 +79,33 @@ def register():
     
 @app.post("/login")
 def login():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+
+    # 1. Missing or invalid JSON → 400
+    if not isinstance(data, dict):
+        return jsonify({"error": "username and password required"}), 400
+
     username = data.get("username")
     password = data.get("password")
 
+    if (
+        not isinstance(username, str)
+        or not username.strip()
+        or not isinstance(password, str)
+        or not password
+    ):
+        return jsonify({"error": "username and password required"}), 400
+
+    # 2. Check credentials → 401 if incorrect
     row = get_db().execute(
-        "SELECT * FROM users WHERE username = ?", (username,)
+        "SELECT * FROM users WHERE username = ?",
+        (username.strip(),)
     ).fetchone()
 
     if row is None or not check_password_hash(row["password_hash"], password):
         return jsonify({"error": "bad credentials"}), 401
 
+    # 3. Successful login → 200
     return jsonify({
         "id": row["id"],
         "username": row["username"],
